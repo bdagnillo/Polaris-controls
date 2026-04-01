@@ -1,14 +1,10 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
+from mpl_toolkits.mplot3d import Axes3D  
 from dataclasses import dataclass
 from scipy.integrate import solve_ivp
 
-
-# ============================================================
-# Parameters
-# ============================================================
-
+#Parameters
 @dataclass
 class RocketParams:
     rho: float = 1.225
@@ -20,50 +16,50 @@ class RocketParams:
     l_body: float = 0.711
     K_body: float = 1.1
 
-    s_fin: float = 0.0635
+    s_fin: float = 0.0635 #fin span
     gamma_c: float = 0.2915
-    t_fin: float = 0.00508
-    C_r: float = 0.0889
-    C_t: float = 0.0889 - 0.0381
+    t_fin: float = 0.00508 #thickness
+    C_r: float = 0.0889 #root chord
+    C_t: float = 0.0889 - 0.0381 #tip
     c_barre: float = 0.0716
     cant: float = 0.1 * np.pi / 180
 
     Jx: float = 0.02
-    Jy: float = 0.2
+    Jy: float = 0.2 #inertia
     Jz: float = 0.2
 
-    Tmax: float = 10.0
+    Tmax: float = 10.0 #max thrust
     tburn: float = 2.5
     fade_time: float = 15.0
 
     r_ag_x: float = 0.134
 
-    @property
+    @property 
     def A_ref(self) -> float:
         return np.pi * self.R**2
 
     @property
-    def d(self) -> float:
+    def d(self) -> float: #rocket diameter
         return 2 * self.R
 
     @property
-    def A_fin(self) -> float:
+    def A_fin(self) -> float: #fin area
         return (0.0889 + (0.0889 - 0.0381)) * self.s_fin / 2
 
     @property
-    def y_mac(self) -> float:
+    def y_mac(self) -> float: #location related to mac
         return (self.s_fin / 3) * ((self.C_r + 2 * self.C_t) / (self.C_r + self.C_t))
 
     @property
-    def K_TB(self) -> float:
+    def K_TB(self) -> float: #correction factor
         return 1 + self.R / (self.R + self.s_fin)
 
     @property
-    def J(self) -> np.ndarray:
+    def J(self) -> np.ndarray: #inertia matrix
         return np.diag([self.Jx, self.Jy, self.Jz])
 
     @property
-    def Mmat(self) -> np.ndarray:
+    def Mmat(self) -> np.ndarray: #combined mass and inertia matrix 6x6
         return np.block([
             [self.mass * np.eye(3), np.zeros((3, 3))],
             [np.zeros((3, 3)), self.J]
@@ -72,21 +68,19 @@ class RocketParams:
 
 @dataclass
 class ControlParams:
-    Kp_p: float = 0.2357
-    Ki_p: float = 0.5656
+    Kp_p: float = 0.2357 #proportional gain for roll rate
+    Ki_p: float = 0.5656 #integral gain
 
-    K_theta: float = 2.0
-    K_psi: float = 2.0
+    K_theta: float = 2.0 #gain converts pitch angle error to pitch rate command
+    K_psi: float = 2.0 #same for yaw
 
-    Kp_q: float = 3.0
-    Kp_r: float = 3.0
+    Kp_q: float = 3.0 #proportional gain for pitch rate
+    Kp_r: float = 3.0 #proportional gain for yaw rate
 
 
-# ============================================================
-# Rotation helpers
-# ============================================================
 
-def hat(vec: np.ndarray) -> np.ndarray:
+#Rotation helpers
+def hat(vec: np.ndarray) -> np.ndarray: #cross product
     return np.array([
         [0.0, -vec[2], vec[1]],
         [vec[2], 0.0, -vec[0]],
@@ -94,7 +88,7 @@ def hat(vec: np.ndarray) -> np.ndarray:
     ])
 
 
-def Cba(psi: float, theta: float, phi: float) -> np.ndarray:
+def Cba(psi: float, theta: float, phi: float) -> np.ndarray: #transform vector between frames
     return np.array([
         [
             np.cos(psi) * np.cos(theta),
@@ -114,7 +108,7 @@ def Cba(psi: float, theta: float, phi: float) -> np.ndarray:
     ])
 
 
-def Sba(psi: float, theta: float) -> np.ndarray:
+def Sba(psi: float, theta: float) -> np.ndarray: #transform betwen body rates and euler angle rates
     return np.array([
         [np.cos(psi) * np.cos(theta), np.sin(psi), 0.0],
         [-np.sin(psi) * np.cos(theta), np.cos(psi), 0.0],
@@ -122,66 +116,62 @@ def Sba(psi: float, theta: float) -> np.ndarray:
     ])
 
 
-def C1(delta: float) -> np.ndarray:
+def C1(delta: float) -> np.ndarray: #rotation matrix about x axis
     return np.array([
         [1.0, 0.0, 0.0],
-        [0.0, np.cos(delta), -np.sin(delta)],
+        [0.0, np.cos(delta), -np.sin(delta)], 
         [0.0, np.sin(delta), np.cos(delta)]
     ])
 
 
-# ============================================================
-# Propulsion
-# ============================================================
 
-def thrust_profile(t: float, p: RocketParams) -> float:
+#Propulsion
+def thrust_profile(t: float, p: RocketParams) -> float: #t=current simulation time 
     if t < p.tburn:
         return p.Tmax
     if t < p.tburn + p.fade_time:
         x = (t - p.tburn) / p.fade_time
-        return p.Tmax * 0.5 * (1 + np.cos(np.pi * x))
+        return p.Tmax * 0.5 * (1 + np.cos(np.pi * x)) #cosine decay
     return 0.0
 
 
-# ============================================================
-# Aerodynamics and forces
-# ============================================================
 
+#Forces
 def forces_and_moments(
     t: float,
     psi: float,
-    theta: float,
+    theta: float, #Euler angles
     phi: float,
     nu: np.ndarray,
     m_c: np.ndarray,
     p: RocketParams
 ) -> tuple[np.ndarray, float]:
-    DCM = Cba(psi, theta, phi)
+    DCM = Cba(psi, theta, phi) #build orientation matrix from euler angles
 
     v_air_b = np.real(DCM @ nu[0:3])
     delta = np.arctan2(v_air_b[2], v_air_b[1])
 
-    Ccb = C1(-delta)
+    Ccb = C1(-delta) #create  x rotation matrix
     Cca = Ccb @ DCM
 
-    Ux, Uy, Uz = v_air_b
+    Ux, Uy, Uz = v_air_b #unpack body frame velocity components
     U = np.sqrt(Ux**2 + Uy**2 + Uz**2) + 1e-6
     alpha = np.arctan2(Uz, Ux)
     Mach = U / 340.0
-    beta = np.sqrt(max(1.0 - Mach**2, 1e-6))
+    beta = np.sqrt(max(1.0 - Mach**2, 1e-6)) 
 
     p_roll = nu[3]
     q_pitch = nu[4]
     r_ag = np.array([p.r_ag_x, 0.0, 0.0])
 
-    C_N_nose = (2.0 / p.A_ref) * (p.A_ref * np.sin(-alpha))
-    C_N_body = p.K_body * ((p.d * p.l_body) / p.A_ref) * np.sin(-alpha) ** 2
-    C_N_fins = -alpha * p.K_TB * (3.0 / 2.0) * (
+    C_N_nose = (2.0 / p.A_ref) * (p.A_ref * np.sin(-alpha)) #Normal force coefficient nose
+    C_N_body = p.K_body * ((p.d * p.l_body) / p.A_ref) * np.sin(-alpha) ** 2 #body
+    C_N_fins = -alpha * p.K_TB * (3.0 / 2.0) * ( #fin
         2.0 * np.pi * (p.s_fin**2 / p.A_ref) /
         (1.0 + np.sqrt(1.0 + (beta * p.s_fin / (p.A_fin * np.cos(p.gamma_c)))**2))
     )
 
-    C_f = 0.007
+    C_f = 0.007 #skin friction
     C_f_c = C_f * (1.0 - 0.1 * Mach**2)
     C_d_friction = C_f_c * (
         ((1.0 + 1.0 / (2.0 * (p.l / p.d))) * np.pi * p.d * p.l +
@@ -204,7 +194,7 @@ def forces_and_moments(
         (1.0 + np.sqrt(1.0 + (beta * p.s_fin / (p.A_fin * np.cos(p.gamma_c)))**2))
     )
 
-    C_l_f = 3.0 * (p.y_mac + p.R) * lift_slope_term * p.cant / p.d
+    C_l_f = 3.0 * (p.y_mac + p.R) * lift_slope_term * p.cant / p.d #rolling moment coef contribution due to fin cant
 
     geom_term = (
         0.5 * (p.C_r + p.C_t) * p.R**2 * p.s_fin
@@ -212,12 +202,12 @@ def forces_and_moments(
         + (p.C_r + 3.0 * p.C_t) * (1.0 / 12.0) * p.s_fin**3
     )
 
-    C_l_d = 3.0 * p_roll * (2.0 * np.pi / beta) * geom_term / (p.A_ref * p.d * U)
+    C_l_d = 3.0 * p_roll * (2.0 * np.pi / beta) * geom_term / (p.A_ref * p.d * U) #roll damping coefficient
     if not np.isfinite(C_l_d):
         C_l_d = 0.0
 
-    N = 0.5 * p.rho * p.A_ref * (C_N_nose + C_N_body + C_N_fins) * U**2
-    D = 0.5 * p.rho * p.A_ref * C_d_0 * U**2
+    N = 0.5 * p.rho * p.A_ref * (C_N_nose + C_N_body + C_N_fins) * U**2 #normal force
+    D = 0.5 * p.rho * p.A_ref * C_d_0 * U**2 #drag
 
     m_l = np.array([
         0.5 * p.rho * p.A_ref * p.d * (C_l_f - C_l_d) * U**2,
@@ -247,8 +237,6 @@ def forces_and_moments(
     if not np.all(np.isfinite(m_damping)):
         m_damping = np.zeros(3)
 
-    # MATLAB computes f_N and pitch moment, but does not add f_N into f_total.
-    # That behavior is preserved here to match the original file.
     f_total = f_g + f_t + f_d
     m_total = m_l + pitch_moment + m_damping + m_c
 
@@ -256,75 +244,72 @@ def forces_and_moments(
     return FM, alpha
 
 
-# ============================================================
-# Dynamics
-# ============================================================
 
-def ode_rocket(t: float, nu: np.ndarray, m_c: np.ndarray, p: RocketParams) -> np.ndarray:
-    v = nu[0:3]
-    omega = nu[3:6]
+#Dynamics
+def ode_rocket(t: float, nu: np.ndarray, m_c: np.ndarray, p: RocketParams) -> np.ndarray: #m_c=control moment from controller
+    v = nu[0:3] #u,v,w translational velocity vector
+    omega = nu[3:6] #p,q,r angular velocity vector in body coordinates
     phi = nu[6]
-    theta = nu[7]
+    theta = nu[7]#pulling out euler angles
     psi = nu[8]
 
-    dangles = np.linalg.solve(Sba(psi, theta), omega)
-    dpos = v
+    dangles = np.linalg.solve(Sba(psi, theta), omega) #dangles=vector of euler angle rates
+    dpos = v #position derivative
 
-    gyro = np.concatenate([np.zeros(3), hat(omega) @ (p.J @ omega)])
-    rhs = forces_and_moments(t, psi, theta, phi, nu, m_c, p)[0] - gyro
-    dnu_dyn = np.linalg.solve(p.Mmat, rhs)
+    gyro = np.concatenate([np.zeros(3), hat(omega) @ (p.J @ omega)]) #last 3 elements=rotational gyroscopic term
+    rhs = forces_and_moments(t, psi, theta, phi, nu, m_c, p)[0] - gyro #returns vector FM then subtract gyro
+    dnu_dyn = np.linalg.solve(p.Mmat, rhs) #gives 3 translational accelerations and 3 angular accelerations
 
-    return np.concatenate([dnu_dyn, dangles, dpos])
+    return np.concatenate([dnu_dyn, dangles, dpos]) #complete derivative of 12 state vector
 
 
-def ode_cl(t: float, X: np.ndarray, p_step: float, p: RocketParams, c: ControlParams) -> np.ndarray:
-    nu = X[0:12]
-    xi = X[12]
+def ode_cl(t: float, X: np.ndarray, p_step: float, p: RocketParams, c: ControlParams) -> np.ndarray: #p_step=commanded roll-rate step input c=controller gains
+    nu = X[0:12] #12 rocket states
+    xi = X[12] #integral state for roll PI controller, stores accumulated roll rate error 
 
-    # MATLAB bug/behavior preserved exactly:
-    # p_step is passed in, but p_ref is always zero.
+    
     if t < 5.0:
         p_ref = 0.0
     else:
-        p_ref = 0.0
+        p_ref = 0.0 #??? roll rate ekpt at zero and not tracking 30deg/s roll command
 
     roll_rate = nu[3]
     pitch_rate = nu[4]
     yaw_rate = nu[5]
     theta = nu[7]
-    psi = nu[8]
+    psi = nu[8] #yaw angle
 
     theta_ref = 0.0
     psi_ref = 0.0
 
-    q_ref = c.K_theta * (theta_ref - theta)
-    r_ref = c.K_psi * (psi_ref - psi)
+    q_ref = c.K_theta * (theta_ref - theta) #get desired pitch rate from picth angle error
+    r_ref = c.K_psi * (psi_ref - psi) #yaw      angle error to desireed rate to control moment
 
     e_p = p_ref - roll_rate
-    e_q = q_ref - pitch_rate
+    e_q = q_ref - pitch_rate #tracking roll pitch and yaw rate errors
     e_r = r_ref - yaw_rate
 
-    dxi = e_p
+    dxi = e_p #derivative of integrator state is roll rate error
 
-    m_cx = c.Kp_p * e_p + c.Ki_p * xi
-    m_cy = c.Kp_q * e_q
-    m_cz = c.Kp_r * e_r
+    m_cx = c.Kp_p * e_p + c.Ki_p * xi #roll control moment=proportiotinal+integral
+    m_cy = c.Kp_q * e_q #pitch
+    m_cz = c.Kp_r * e_r #yaw
 
     m_c = np.array([m_cx, m_cy, m_cz])
-    dnu = ode_rocket(t, nu, m_c, p)
+    dnu = ode_rocket(t, nu, m_c, p) #calling plant dynamics
 
-    return np.concatenate([dnu, [dxi]])
+    return np.concatenate([dnu, [dxi]]) #derivatibe of 13 state closed lopp system
 
 
-def ode_open(t: float, nu: np.ndarray, p: RocketParams) -> np.ndarray:
+def ode_open(t: float, nu: np.ndarray, p: RocketParams) -> np.ndarray: #no control
     return ode_rocket(t, nu, np.zeros(3), p)
 
 
 def ode_cl_disturb(
-    t: float,
-    X: np.ndarray,
+    t: float, #testign disturbance
+    X: np.ndarray, #full state including integrator
     p_step: float,
-    M_dist: float,
+    M_dist: float, #disturbance moment
     p: RocketParams,
     c: ControlParams
 ) -> np.ndarray:
@@ -334,25 +319,25 @@ def ode_cl_disturb(
     if t < 5.0:
         p_ref = 0.0
     else:
-        p_ref = p_step
+        p_ref = p_step #reference allowed here
 
     roll_rate = nu[3]
 
     e_p = p_ref - roll_rate
     dxi = e_p
 
-    # MATLAB sets pitch/yaw channel gains to zero in disturb case.
+
     m_cx = c.Kp_p * e_p + c.Ki_p * xi
     m_c = np.array([m_cx, 0.0, 0.0])
 
-    if 8.0 < t < 8.2:
+    if 8.0 < t < 8.2: #add disturbance in this time 
         m_c = m_c + np.array([M_dist, 0.0, 0.0])
 
     dnu = ode_rocket(t, nu, m_c, p)
-    return np.concatenate([dnu, [dxi]])
+    return np.concatenate([dnu, [dxi]]) 
 
 
-def ode_open_disturb(t: float, nu: np.ndarray, M_dist: float, p: RocketParams) -> np.ndarray:
+def ode_open_disturb(t: float, nu: np.ndarray, M_dist: float, p: RocketParams) -> np.ndarray: #disturbnace without control
     m_c = np.zeros(3)
     if 8.0 < t < 8.2:
         m_c = m_c + np.array([M_dist, 0.0, 0.0])
@@ -369,10 +354,8 @@ event_apogee.terminal = True
 event_apogee.direction = -1
 
 
-# ============================================================
-# Analysis helpers
-# ============================================================
 
+#Analysis helpers
 def compute_body_air_quantities(
     t: np.ndarray,
     nu_hist: np.ndarray,
@@ -412,7 +395,7 @@ def reconstruct_control_history(t: np.ndarray, X: np.ndarray, c: ControlParams):
     theta = nu[:, 7]
     psi = nu[:, 8]
 
-    # MATLAB main script sets these to zero for all time.
+ 
     p_ref = np.zeros_like(t)
     theta_ref = np.zeros_like(t)
     psi_ref = np.zeros_like(t)
@@ -478,10 +461,8 @@ def run_closed_loop_case(
     )
 
 
-# ============================================================
-# Main simulation
-# ============================================================
 
+#Main simulation
 def simulate_rocket_trajectory():
     rocket = RocketParams()
     control = ControlParams()
@@ -496,9 +477,9 @@ def simulate_rocket_trajectory():
     t_eval = np.linspace(0.0, 20.0, 1000)
     p_step_main = 30 * np.pi / 180
 
-    # -------------------------
-    # Main closed-loop run
-    # -------------------------
+   
+    #Main closed-loop run
+  
     sol_cl = solve_ivp(
         fun=lambda t, X: ode_cl(t, X, p_step_main, rocket, control),
         t_span=(0.0, 20.0),
@@ -531,9 +512,9 @@ def simulate_rocket_trajectory():
     alpha_array, beta_array, q_dyn, Vbody_array = compute_body_air_quantities(t, nu, rocket.rho)
     Fx, Fy, Fz, Mx, My, Mz, alpha_log = compute_force_moment_history(t, nu, rocket)
 
-    # -------------------------
-    # Open-loop run
-    # -------------------------
+    
+    #Open-loop run
+   
     sol_ol = solve_ivp(
         fun=lambda t, nu_: ode_open(t, nu_, rocket),
         t_span=(0.0, 20.0),
@@ -548,18 +529,15 @@ def simulate_rocket_trajectory():
     p_ol = nu_ol[:, 3]
     phi_ol = nu_ol[:, 6]
 
-    # -------------------------
-    # Energy
-    # -------------------------
+    #Energy
     Vmag = np.sqrt(u**2 + v**2 + w**2)
     h = x  # MATLAB uses h = x
     E_kin = 0.5 * rocket.mass * Vmag**2
     E_pot = rocket.mass * rocket.g * h
     E_tot = E_kin + E_pot
 
-    # -------------------------
-    # 3D trajectory with orientation arrows
-    # -------------------------
+
+    #3D trajectory with orientation arrows
     fig = plt.figure()
     ax = fig.add_subplot(111, projection="3d")
     ax.plot(x, y, z, linewidth=1.5, label="Trajectory")
@@ -588,9 +566,7 @@ def simulate_rocket_trajectory():
     ax.legend()
     ax.view_init(elev=-35, azim=-63)
 
-    # -------------------------
-    # Linear states summary
-    # -------------------------
+   
     plt.figure()
 
     plt.subplot(2, 2, 1)
@@ -628,9 +604,6 @@ def simulate_rocket_trajectory():
     plt.title("Position magnitude")
     plt.grid(True)
 
-    # -------------------------
-    # Angular states summary
-    # -------------------------
     plt.figure()
 
     plt.subplot(2, 2, 1)
@@ -671,9 +644,6 @@ def simulate_rocket_trajectory():
     plt.grid(True)
     plt.legend()
 
-    # -------------------------
-    # Alpha / beta / dynamic pressure
-    # -------------------------
     plt.figure()
 
     plt.subplot(3, 1, 1)
@@ -722,9 +692,6 @@ def simulate_rocket_trajectory():
     plt.grid(True)
     plt.legend()
 
-    # -------------------------
-    # Energy
-    # -------------------------
     plt.figure()
     plt.plot(t, E_kin, linewidth=1.5, label="Kinetic")
     plt.plot(t, E_pot, linewidth=1.5, label="Potential")
@@ -734,10 +701,7 @@ def simulate_rocket_trajectory():
     plt.title("Energy evolution")
     plt.grid(True)
     plt.legend()
-
-    # -------------------------
-    # Roll tracking
-    # -------------------------
+  
     plt.figure()
     plt.plot(t, p * 180 / np.pi, linewidth=1.5, label="p")
     plt.plot(t, p_ref * 180 / np.pi, "--", linewidth=1.5, label="p_ref")
@@ -800,9 +764,7 @@ def simulate_rocket_trajectory():
     plt.title("Relative contribution of roll to total angular rate")
     plt.grid(True)
 
-    # -------------------------
-    # Alpha + body speed (repeated in MATLAB later)
-    # -------------------------
+   
     plt.figure()
 
     plt.subplot(2, 1, 1)
@@ -819,9 +781,7 @@ def simulate_rocket_trajectory():
     plt.title("Body-frame speed")
     plt.grid(True)
 
-    # -------------------------
-    # Closed-loop vs open-loop
-    # -------------------------
+    
     plt.figure()
     plt.plot(t, p * 180 / np.pi, linewidth=1.5, label="Closed-loop (PI)")
     plt.plot(t_ol, p_ol * 180 / np.pi, "--", linewidth=1.5, label="Open-loop (no control)")
@@ -840,9 +800,9 @@ def simulate_rocket_trajectory():
     plt.grid(True)
     plt.legend()
 
-    # -------------------------
-    # Command amplitude sweep
-    # -------------------------
+   
+    #Command amplitude sweep
+    
     p_steps_deg = [10, 30, 60]
     plt.figure()
     for p_deg in p_steps_deg:
@@ -859,9 +819,9 @@ def simulate_rocket_trajectory():
     plt.grid(True)
     plt.legend()
 
-    # -------------------------
-    # Disturbance rejection
-    # -------------------------
+    
+    #Disturbance rejection
+    
     M_dist = 0.5
 
     sol_dist_cl = solve_ivp(
