@@ -7,15 +7,18 @@ from scipy.integrate import solve_ivp
 #Parameters
 @dataclass
 class RocketParams:
-    rho: float = 1.225
-    mass: float = 0.481
-    g: float = 9.81
+    rho: float = 1.225 #TBD
+    mass: float = 5 # kg TBD
+    g: float = 9.81 # m/s^2
 
-    R: float = 0.0762 / 2
-    l: float = 0.9144
+    # all lengths in meters
+    d: float = 0.1016 # diameter
+    R: float = 0.0762 / 2 # rocket radius
+    l: float = 1.9558 # total length maybe
     l_body: float = 0.711
     K_body: float = 1.1
 
+    # fin geometry
     s_fin: float = 0.0635 #fin span
     gamma_c: float = 0.2915
     t_fin: float = 0.00508 #thickness
@@ -28,9 +31,9 @@ class RocketParams:
     Jy: float = 0.2 #inertia
     Jz: float = 0.2
 
-    Tmax: float = 10.0 #max thrust
-    tburn: float = 2.5
-    fade_time: float = 15.0
+    # Tmax: float = 10.0 #max thrust
+    # tburn: float = 2.5
+    # fade_time: float = 15.0
 
     r_ag_x: float = 0.134
 
@@ -64,6 +67,26 @@ class RocketParams:
             [self.mass * np.eye(3), np.zeros((3, 3))],
             [np.zeros((3, 3)), self.J]
         ])
+    
+    
+    def generate_thrust_curve(self, file: str) -> callable:
+        thrust = np.loadtxt(file, delimiter=',', skiprows=5)
+        self.thrust = lambda t: np.interp(t, thrust[:, 0], thrust[:, 1])
+
+    def plot_thrust_curve(self):
+        if not hasattr(self, 'thrust'):
+            raise ValueError("Thrust curve not generated. Call generate_thrust_curve() first.")
+
+        t = np.linspace(0, 20, 1000)
+        thrust_values = np.array([self.thrust(ti) for ti in t])
+
+        plt.figure()
+        plt.plot(t, thrust_values, linewidth=1.5)
+        plt.xlabel("Time [s]")
+        plt.ylabel("Thrust [N]")
+        plt.title("Rocket Thrust Curve")
+        plt.grid(True)
+        plt.show()
 
 
 @dataclass
@@ -77,6 +100,11 @@ class ControlParams:
     Kp_q: float = 3.0 #proportional gain for pitch rate
     Kp_r: float = 3.0 #proportional gain for yaw rate
 
+    def compute_moment_from_Kp(self, Kp: float, Ki: float, xi: float, e_p: float) -> float:
+
+        # TODO : figure out physical mapping from canard angle to roll moment
+
+        return 0
 
 
 #Rotation helpers
@@ -122,18 +150,6 @@ def C1(delta: float) -> np.ndarray: #rotation matrix about x axis
         [0.0, np.cos(delta), -np.sin(delta)], 
         [0.0, np.sin(delta), np.cos(delta)]
     ])
-
-
-
-#Propulsion
-def thrust_profile(t: float, p: RocketParams) -> float: #t=current simulation time 
-    if t < p.tburn:
-        return p.Tmax
-    if t < p.tburn + p.fade_time:
-        x = (t - p.tburn) / p.fade_time
-        return p.Tmax * 0.5 * (1 + np.cos(np.pi * x)) #cosine decay
-    return 0.0
-
 
 
 #Forces
@@ -218,7 +234,9 @@ def forces_and_moments(
     f_g = np.array([-p.mass * p.g, 0.0, 0.0]) #weight
     f_d = Cca.T @ np.array([-D, 0.0, 0.0]) #drag rotated into dynamics frane
 
-    thrust = thrust_profile(t, p)
+    # thrust = thrust_profile(t, p)
+    
+    thrust = p.thrust(t) if hasattr(p, 'thrust') else 0.0 #use thrust curve if generated, otherwise zero
     f_t = DCM.T @ np.array([thrust, 0.0, 0.0]) #thrust rotated into dynamics frame
 
     f_N = Cca.T @ np.array([0.0, N, 0.0])
@@ -247,6 +265,8 @@ def forces_and_moments(
 
 #Dynamics
 def ode_rocket(t: float, nu: np.ndarray, m_c: np.ndarray, p: RocketParams) -> np.ndarray: #m_c=control moment from controller
+
+
     v = nu[0:3] #u,v,w translational velocity vector
     omega = nu[3:6] #p,q,r angular velocity vector in body coordinates
     phi = nu[6]
@@ -291,7 +311,8 @@ def ode_cl(t: float, X: np.ndarray, p_step: float, p: RocketParams, c: ControlPa
 
     dxi = e_p #derivative of integrator state is roll rate error
 
-    m_cx = c.Kp_p * e_p + c.Ki_p * xi #roll control moment=proportiotinal+integral
+    # m_cx = c.Kp_p * e_p + c.Ki_p * xi #roll control moment=proportiotinal+integral 
+    m_cx = c.compute_moment_from_angle(c.Kp_p, c.Ki_p, xi, e_p) #use helper function to compute roll control moment based on physical canards
     m_cy = c.Kp_q * e_q #pitch
     m_cz = c.Kp_r * e_r #yaw
 
@@ -466,6 +487,9 @@ def run_closed_loop_case(
 def simulate_rocket_trajectory():
     rocket = RocketParams()
     control = ControlParams()
+
+    rocket.generate_thrust_curve("AeroTech_HP-K535W.csv") #generate thrust curve function from file
+    rocket.plot_thrust_curve()
 
     nu0 = np.zeros(12)
     nu0[7] = 2 * np.pi / 180   #set intiial pitch to 2
