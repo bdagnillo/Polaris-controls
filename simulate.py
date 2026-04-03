@@ -1,8 +1,10 @@
+import argparse
 import os
 import time
 import numpy as np
 from dataclasses import dataclass
 from scipy.integrate import solve_ivp
+from disturbance_models import load as load_disturbance
 
 #Parameters
 @dataclass
@@ -79,8 +81,10 @@ class RocketParams:
 
 @dataclass
 class ControlParams:
-    Kp_p: float = 0.2357 #proportional gain for roll rate
-    Ki_p: float = 0.5656 #integral gain
+    K_phi: float = 2.0   #outer-loop P gain: roll angle error → roll rate command [rad/s per rad]
+
+    Kp_p: float = 0.2357 #inner-loop P gain for roll rate
+    Ki_p: float = 0.5656 #inner-loop I gain for roll rate
 
     K_theta: float = 2.0 #gain converts pitch angle error to pitch rate command
     K_psi: float = 2.0 #same for yaw
@@ -232,9 +236,11 @@ def forces_and_moments(
         + (p.C_r + 3.0 * p.C_t) * (1.0 / 12.0) * p.s_fin**3
     )
 
-    C_l_d = 3.0 * p_roll * (2.0 * np.pi / beta) * geom_term / (p.A_ref * p.d * U) #roll damping coefficient
-    if not np.isfinite(C_l_d):
-        C_l_d = 0.0
+    # Floor for damping denominators — prevents 1/U and 1/U² singularities near apogee
+    # where aerodynamic damping is negligible anyway (dynamic pressure → 0)
+    U_damp = max(U, 5.0)
+
+    C_l_d = 3.0 * p_roll * (2.0 * np.pi / beta) * geom_term / (p.A_ref * p.d * U_damp) #roll damping coefficient
 
     N = 0.5 * p.rho * p.A_ref * (C_N_nose + C_N_body + C_N_fins) * U**2 #normal force
     D = 0.5 * p.rho * p.A_ref * C_d_0 * U**2 #drag
@@ -254,9 +260,9 @@ def forces_and_moments(
     f_N = Cca.T @ np.array([0.0, N, 0.0])
     pitch_moment = hat(r_ag) @ DCM @ f_N
 
-    C_damp_body = 0.55 * ((p.l**4 * p.R) / (p.A_ref * p.d)) * (np.abs(q_pitch) * q_pitch / U**2)
+    C_damp_body = 0.55 * ((p.l**4 * p.R) / (p.A_ref * p.d)) * (np.abs(q_pitch) * q_pitch / U_damp**2)
     d_fin_cg = 0.825 - 0.506                                                         #pitch damping
-    C_damp_fin = 0.6 * 3.0 * p.A_fin * d_fin_cg**3 * np.abs(q_pitch) * q_pitch / (p.A_ref * p.d * U**2)
+    C_damp_fin = 0.6 * 3.0 * p.A_fin * d_fin_cg**3 * np.abs(q_pitch) * q_pitch / (p.A_ref * p.d * U_damp**2)
 
     m_damping = Ccb.T @ np.array([
         0.0,
@@ -295,45 +301,42 @@ def ode_rocket(t: float, nu: np.ndarray, m_c: np.ndarray, p: RocketParams) -> np
     return np.concatenate([dnu_dyn, dangles, dpos]) #complete derivative of 12 state vector
 
 
-def ode_cl(t: float, X: np.ndarray, p_step: float, p: RocketParams, c: ControlParams) -> np.ndarray: #p_step=commanded roll-rate step input c=controller gains
+def ode_cl(t: float, X: np.ndarray, phi_ref: float, p: RocketParams, c: ControlParams) -> np.ndarray:
     nu = X[0:12] #12 rocket states
-    xi = X[12] #integral state for roll PI controller, stores accumulated roll rate error
+    xi = X[12]   #integral state for inner-loop roll-rate PI
 
-    if t < 5.0:
-        p_ref = 0.0
-    else:
-        p_ref = 0.0 #??? roll rate kept at zero and not tracking 30deg/s roll command
-
+    phi       = nu[6]
     roll_rate = nu[3]
     pitch_rate = nu[4]
-    yaw_rate = nu[5]
+    yaw_rate   = nu[5]
     theta = nu[7]
-    psi = nu[8] #yaw angle
+    psi   = nu[8]
 
-    v_body = Cba(psi, theta, nu[6]) @ nu[0:3]
-    U = np.linalg.norm(v_body) + 1e-6 #airspeed magnitude needed for aero torque mapping
+    v_body = Cba(psi, theta, phi) @ nu[0:3]
+    U = np.linalg.norm(v_body) + 1e-6
 
-    theta_ref = 0.0
-    psi_ref = 0.0
+    # Outer loop: roll angle error → roll rate command
+    p_ref = c.K_phi * (phi_ref - phi)
 
-    q_ref = c.K_theta * (theta_ref - theta) #desired pitch rate from pitch angle error
-    r_ref = c.K_psi * (psi_ref - psi)       #desired yaw rate from yaw angle error
+    # Pitch/yaw outer loops (unchanged)
+    q_ref = c.K_theta * (0.0 - theta)
+    r_ref = c.K_psi   * (0.0 - psi)
 
-    e_p = p_ref - roll_rate
-    e_q = q_ref - pitch_rate #tracking roll pitch and yaw rate errors
+    e_p = p_ref - roll_rate   #inner-loop roll rate error
+    e_q = q_ref - pitch_rate
     e_r = r_ref - yaw_rate
 
-    dxi = e_p #derivative of integrator state is roll rate error
+    dxi = e_p #integrator driven by roll rate error
 
-    delta_cx = c.Kp_p * e_p + c.Ki_p * xi  #commanded roll canard deflection angle [rad]
-    m_cx = canard_torque(delta_cx, p, U, p.rho) #map angle to roll torque via aero model
-    m_cy = c.Kp_q * e_q #pitch
-    m_cz = c.Kp_r * e_r #yaw
+    delta_cx = c.Kp_p * e_p + c.Ki_p * xi  #canard deflection [rad]
+    m_cx = canard_torque(delta_cx, p, U, p.rho)
+    m_cy = c.Kp_q * e_q
+    m_cz = c.Kp_r * e_r
 
     m_c = np.array([m_cx, m_cy, m_cz])
-    dnu = ode_rocket(t, nu, m_c, p) #calling plant dynamics
+    dnu = ode_rocket(t, nu, m_c, p)
 
-    return np.concatenate([dnu, [dxi]]) #derivative of 13-state closed-loop system
+    return np.concatenate([dnu, [dxi]])
 
 
 def ode_open(t: float, nu: np.ndarray, p: RocketParams) -> np.ndarray: #no control
@@ -341,44 +344,37 @@ def ode_open(t: float, nu: np.ndarray, p: RocketParams) -> np.ndarray: #no contr
 
 
 def ode_cl_disturb(
-    t: float, #testign disturbance
-    X: np.ndarray, #full state including integrator
-    p_step: float,
-    M_dist: float, #disturbance moment
+    t: float,
+    X: np.ndarray,
+    phi_ref: float,   #target roll angle [rad]
+    disturbance,      #callable: t -> 3-vector [Mx, My, Mz] N·m
     p: RocketParams,
     c: ControlParams
 ) -> np.ndarray:
     nu = X[0:12]
     xi = X[12]
 
-    if t < 5.0:
-        p_ref = 0.0
-    else:
-        p_ref = p_step #reference allowed here
-
+    phi       = nu[6]
     roll_rate = nu[3]
-    psi_d = nu[8]; theta_d = nu[7]
-    v_body = Cba(psi_d, theta_d, nu[6]) @ nu[0:3]
+    theta = nu[7]; psi = nu[8]
+    v_body = Cba(psi, theta, phi) @ nu[0:3]
     U = np.linalg.norm(v_body) + 1e-6
+
+    p_ref = c.K_phi * (phi_ref - phi)
 
     e_p = p_ref - roll_rate
     dxi = e_p
 
-    delta_cx = c.Kp_p * e_p + c.Ki_p * xi  #commanded roll canard deflection angle [rad]
+    delta_cx = c.Kp_p * e_p + c.Ki_p * xi
     m_cx = canard_torque(delta_cx, p, U, p.rho)
-    m_c = np.array([m_cx, 0.0, 0.0])
-
-    if 8.0 < t < 8.2: #add disturbance in this time 
-        m_c = m_c + np.array([M_dist, 0.0, 0.0])
+    m_c = np.array([m_cx, 0.0, 0.0]) + disturbance(t)
 
     dnu = ode_rocket(t, nu, m_c, p)
-    return np.concatenate([dnu, [dxi]]) 
+    return np.concatenate([dnu, [dxi]])
 
 
-def ode_open_disturb(t: float, nu: np.ndarray, M_dist: float, p: RocketParams) -> np.ndarray: #disturbnace without control
-    m_c = np.zeros(3)
-    if 8.0 < t < 8.2:
-        m_c = m_c + np.array([M_dist, 0.0, 0.0])
+def ode_open_disturb(t: float, nu: np.ndarray, disturbance, p: RocketParams) -> np.ndarray:
+    m_c = disturbance(t)
     return ode_rocket(t, nu, m_c, p)
 
 
@@ -428,31 +424,30 @@ def compute_body_air_quantities(
     return alpha_array, beta_array, q_dyn, Vbody_array
 
 
-def reconstruct_control_history(t: np.ndarray, X: np.ndarray, c: ControlParams, rocket: RocketParams):
+def reconstruct_control_history(t: np.ndarray, X: np.ndarray, c: ControlParams,
+                                rocket: RocketParams, phi_ref: float):
     nu = X[:, 0:12]
     xi = X[:, 12]
 
+    phi    = nu[:, 6]
     p_rate = nu[:, 3]
     q_rate = nu[:, 4]
     r_rate = nu[:, 5]
     theta  = nu[:, 7]
     psi    = nu[:, 8]
 
-    p_ref     = np.zeros_like(t)
-    theta_ref = np.zeros_like(t)
-    psi_ref   = np.zeros_like(t)
-
-    q_ref = c.K_theta * (theta_ref - theta)
-    r_ref = c.K_psi   * (psi_ref   - psi)
+    # Mirror the cascade structure in ode_cl
+    p_ref = c.K_phi * (phi_ref - phi)   #outer loop: angle → rate command
+    q_ref = c.K_theta * (0.0 - theta)
+    r_ref = c.K_psi   * (0.0 - psi)
 
     e_p = p_ref - p_rate
     e_q = q_ref - q_rate
     e_r = r_ref - r_rate
 
-    # Reconstruct canard deflection angle history, then map to torque
     delta_cx = c.Kp_p * e_p + c.Ki_p * xi
     U_hist = np.array([
-        np.linalg.norm(Cba(psi[k], theta[k], nu[k, 6]) @ nu[k, 0:3]) + 1e-6
+        np.linalg.norm(Cba(psi[k], theta[k], phi[k]) @ nu[k, 0:3]) + 1e-6
         for k in range(len(t))
     ])
     m_cx = np.array([canard_torque(delta_cx[k], rocket, U_hist[k], rocket.rho) for k in range(len(t))])
@@ -496,16 +491,17 @@ def run_closed_loop_case(
     t_eval: np.ndarray,
     rocket: RocketParams,
     control: ControlParams,
-    p_step: float
+    phi_ref: float,
+    ivp_method: str = "BDF"
 ):
     return solve_ivp(
         fun=ode_cl,
-        args=(p_step, rocket, control),
+        args=(phi_ref, rocket, control),
         t_span=(t_eval[0], t_eval[-1]),
         y0=X0,
         t_eval=t_eval,
         events=event_apogee,
-        method='LSODA',
+        method=ivp_method,
         rtol=1e-6,
         atol=1e-9
     )
@@ -513,7 +509,9 @@ def run_closed_loop_case(
 
 
 #Main simulation
-def simulate_rocket_trajectory():
+_VALID_METHODS = ("RK45", "RK23", "DOP853", "Radau", "BDF", "LSODA")
+
+def simulate_rocket_trajectory(disturbance=None, ivp_method="BDF"):
     print("=== Polaris Roll-Control Simulation ===")
 
     rocket = RocketParams()
@@ -521,11 +519,17 @@ def simulate_rocket_trajectory():
     print(f"[init] RocketParams: mass={rocket.mass} kg, R={rocket.R:.4f} m, "
           f"d={rocket.d:.4f} m, l={rocket.l:.4f} m")
     print(f"[init] Inertia: Jx={rocket.Jx} kg·m², Jy={rocket.Jy} kg·m², Jz={rocket.Jz} kg·m²")
-    print(f"[init] ControlParams: Kp_p={control.Kp_p}, Ki_p={control.Ki_p}, "
+    print(f"[init] ControlParams: K_phi={control.K_phi}, Kp_p={control.Kp_p}, Ki_p={control.Ki_p}, "
           f"Kp_q={control.Kp_q}, Kp_r={control.Kp_r}")
 
     rocket.generate_thrust_curve("AeroTech_HP-K535W.csv") #generate thrust curve function from file
     print("[init] Thrust curve loaded")
+
+    if disturbance is None:
+        disturbance = load_disturbance("default")
+    dist_desc = getattr(disturbance, "__module__", "unknown").split(".")[-1]
+    print(f"[init] Disturbance model: {dist_desc}")
+    print(f"[init] ODE solver method: {ivp_method}")
 
     nu0 = np.zeros(12)
     nu0[7] = 2 * np.pi / 180   #set intiial pitch to 2
@@ -536,20 +540,20 @@ def simulate_rocket_trajectory():
     X0 = np.concatenate([nu0, [xi0]])
 
     t_eval = np.linspace(0.0, 20.0, 1000)#1000 evenly spaced points
-    p_step_main = 30 * np.pi / 180 #roll command magnitute
-    print(f"[init] Roll command: {np.degrees(p_step_main):.1f} deg/s, t_span=0–20 s, {len(t_eval)} eval points")
+    phi_ref_main = 45 * np.pi / 180  #target roll angle [rad]
+    print(f"[init] Roll angle target: {np.degrees(phi_ref_main):.1f} deg, t_span=0–20 s, {len(t_eval)} eval points")
 
     #Main closed-loop run
     print("\n[1/5] Running main closed-loop simulation ...")
     _t0 = time.perf_counter()
     sol_cl = solve_ivp(
         fun=ode_cl,
-        args=(p_step_main, rocket, control),
+        args=(phi_ref_main, rocket, control),
         t_span=(0.0, 20.0),
         y0=X0,
         t_eval=t_eval,
         events=event_apogee,
-        method='LSODA',
+        method=ivp_method,
         rtol=1e-6,
         atol=1e-9
     )
@@ -573,7 +577,7 @@ def simulate_rocket_trajectory():
           f"max |p|={np.degrees(np.abs(p).max()):.2f}deg/s")
 
     print("[1/5] Reconstructing control history ...")
-    p_ref, e_p, e_q, e_r, m_cx, m_cy, m_cz = reconstruct_control_history(t, X, control, rocket)
+    p_ref, e_p, e_q, e_r, m_cx, m_cy, m_cz = reconstruct_control_history(t, X, control, rocket, phi_ref_main)
     delta_cx_hist = control.Kp_p * e_p + control.Ki_p * xi  #implied canard angle history [rad]
     print(f"      Max roll torque={np.abs(m_cx).max():.4f} N·m, "
           f"max canard deflection={np.degrees(np.abs(delta_cx_hist).max()):.4f} deg")
@@ -597,7 +601,7 @@ def simulate_rocket_trajectory():
         y0=nu0,
         t_eval=t_eval,
         events=event_apogee,
-        method='LSODA',
+        method=ivp_method,
         rtol=1e-6,
         atol=1e-9
     )
@@ -612,32 +616,31 @@ def simulate_rocket_trajectory():
     E_tot = E_kin + E_pot
     print(f"      Peak total energy={E_tot.max():.1f}J  (KE={E_kin.max():.1f}J, PE={E_pot.max():.1f}J)")
 
-    # --- command amplitude sweep (all runs before any figure is created) ---
-    print("\n[3/5] Running command amplitude sweep (p_ref = 10, 30, 60 deg/s) ...")
-    p_steps_deg = [10, 30, 60]
+    # --- roll angle target sweep ---
+    print("\n[3/5] Running roll angle target sweep (phi_ref = 15, 45, 90 deg) ...")
+    phi_refs_deg = [15, 45, 90]
     sweep_results = []
-    for p_deg in p_steps_deg:
-        p_step = p_deg * np.pi / 180
-        print(f"  Sweep: p_ref={p_deg} deg/s ...")
-        sol_j = run_closed_loop_case(X0, t_eval, rocket, control, p_step)
-        p_j = sol_j.y.T[:, 3]
-        print(f"         done, t_final={sol_j.t[-1]:.2f}s, peak p={np.degrees(np.abs(p_j).max()):.2f}deg/s")
-        sweep_results.append((sol_j.t, p_j, p_deg))
+    for phi_deg in phi_refs_deg:
+        phi_ref_j = phi_deg * np.pi / 180
+        print(f"  Sweep: phi_ref={phi_deg} deg ...")
+        sol_j = run_closed_loop_case(X0, t_eval, rocket, control, phi_ref_j, ivp_method)
+        phi_j = sol_j.y.T[:, 6]
+        print(f"         done, t_final={sol_j.t[-1]:.2f}s, final phi={np.degrees(phi_j[-1]):.2f}deg")
+        sweep_results.append((sol_j.t, phi_j, phi_deg))
     print("[3/5] Sweep done")
 
     # --- disturbance rejection ---
-    M_dist = 0.5 #disturbance moment magnitude
-    print(f"\n[4/5] Running disturbance rejection (M_dist={M_dist} N·m at t=8–8.2s) ...")
+    print(f"\n[4/5] Running disturbance rejection (model: {dist_desc}) ...")
 
     _t0 = time.perf_counter()
     sol_dist_cl = solve_ivp(
         fun=ode_cl_disturb,
-        args=(p_step_main, M_dist, rocket, control),
+        args=(phi_ref_main, disturbance, rocket, control),
         t_span=(0.0, 20.0),
         y0=X0,
         t_eval=t_eval,
         events=event_apogee,
-        method='LSODA',
+        method=ivp_method,
         rtol=1e-6,
         atol=1e-9
     )
@@ -646,12 +649,12 @@ def simulate_rocket_trajectory():
     _t0 = time.perf_counter()
     sol_dist_ol = solve_ivp(
         fun=ode_open_disturb,
-        args=(M_dist, rocket),
+        args=(disturbance, rocket),
         t_span=(0.0, 20.0),
         y0=nu0,
         t_eval=t_eval,
         events=event_apogee,
-        method='LSODA',
+        method=ivp_method,
         rtol=1e-6,
         atol=1e-9
     )
@@ -670,6 +673,7 @@ def simulate_rocket_trajectory():
 
     np.savez("data/cl.npz",
         t=t, X=X, nu=nu, xi=xi,
+        phi_ref=np.array(phi_ref_main),
         p_ref=p_ref, e_p=e_p, e_q=e_q, e_r=e_r,
         m_cx=m_cx, m_cy=m_cy, m_cz=m_cz,
         delta_cx=delta_cx_hist,
@@ -680,16 +684,37 @@ def simulate_rocket_trajectory():
     )
     np.savez("data/ol.npz", t=t_ol, nu=nu_ol)
 
-    # sweep: save each case as sweep_<p_deg>.npz
-    for t_j, p_j, p_deg in sweep_results:
-        np.savez(f"data/sweep_{p_deg}.npz", t=t_j, p=p_j, p_deg=np.array(p_deg))
+    # sweep: save each case as sweep_<phi_deg>.npz
+    for t_j, phi_j, phi_deg in sweep_results:
+        np.savez(f"data/sweep_{phi_deg}.npz", t=t_j, phi=phi_j, phi_deg=np.array(phi_deg))
 
-    np.savez("data/dist_cl.npz", t=t_dist_cl, X=X_dist_cl)
-    np.savez("data/dist_ol.npz", t=t_dist_ol, nu=nu_dist_ol)
+    # evaluate disturbance profile over each solution's time grid for plotting
+    dist_hist_cl = np.array([disturbance(ti) for ti in t_dist_cl])  # (N, 3)
+    dist_hist_ol = np.array([disturbance(ti) for ti in t_dist_ol])  # (N, 3)
+
+    np.savez("data/dist_cl.npz", t=t_dist_cl, X=X_dist_cl, dist=dist_hist_cl)
+    np.savez("data/dist_ol.npz", t=t_dist_ol, nu=nu_dist_ol, dist=dist_hist_ol)
 
     print("[5/5] Data saved to data/")
     print("\n=== Simulation complete — run plot.py to visualise ===")
 
 
 if __name__ == "__main__":
-    simulate_rocket_trajectory()
+    parser = argparse.ArgumentParser(description="Polaris roll-control simulation")
+    parser.add_argument(
+        "--disturbance", "-d",
+        default="default",
+        metavar="MODEL",
+        help="Disturbance model name (must match a file in disturbance_models/). "
+             "Default: 'default'."
+    )
+    parser.add_argument(
+        "--method", "-m",
+        default="BDF",
+        choices=_VALID_METHODS,
+        metavar="METHOD",
+        help=f"scipy solve_ivp method. Choices: {', '.join(_VALID_METHODS)}. Default: BDF."
+    )
+    args = parser.parse_args()
+    dist_fn = load_disturbance(args.disturbance)
+    simulate_rocket_trajectory(disturbance=dist_fn, ivp_method=args.method)
