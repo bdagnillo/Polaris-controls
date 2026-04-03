@@ -221,6 +221,9 @@ def forces_and_moments(
     C_l_d = 3.0 * p_roll * (2.0 * np.pi / beta) * geom_term / (p.A_ref * p.d * U) #roll damping coefficient
     if not np.isfinite(C_l_d):
         C_l_d = 0.0
+    C_l_d = 3.0 * p_roll * (2.0 * np.pi / beta) * geom_term / (p.A_ref * p.d * U) #roll damping coefficient
+    if not np.isfinite(C_l_d):
+        C_l_d = 0.0
 
     N = 0.5 * p.rho * p.A_ref * (C_N_nose + C_N_body + C_N_fins) * U**2 #normal force
     D = 0.5 * p.rho * p.A_ref * C_d_0 * U**2 #drag
