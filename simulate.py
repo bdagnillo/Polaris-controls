@@ -139,15 +139,6 @@ def C1(delta: float) -> np.ndarray: #rotation matrix about x axis
     ])
 
 
-#Propulsion
-def thrust_profile(t: float, p: RocketParams) -> float:
-    if t < p.tburn:
-        return p.Tmax
-    if t < p.tburn + p.fade_time:
-        x = (t - p.tburn) / p.fade_time
-        return p.Tmax * 0.5 * (1 + np.cos(np.pi * x)) #cosine decay
-    return 0.0
-
 
 def canard_torque(delta_c: float, p: RocketParams, U: float, rho: float) -> float:
     """Convert canard deflection angle (rad) to roll torque (N·m).
@@ -254,7 +245,9 @@ def forces_and_moments(
     f_g = np.array([-p.mass * p.g, 0.0, 0.0]) #weight
     f_d = Cca.T @ np.array([-D, 0.0, 0.0]) #drag rotated into dynamics frane
 
-    thrust = p.thrust(t) if hasattr(p, 'thrust') else thrust_profile(t, p)
+    if not hasattr(p, 'thrust'):
+        raise ValueError("No thrust curve provided in RocketParams. Set p.thrust to a callable.")
+    thrust = p.thrust(t)
     f_t = DCM.T @ np.array([thrust, 0.0, 0.0]) #thrust rotated into dynamics frame
 
     f_N = Cca.T @ np.array([0.0, N, 0.0])
