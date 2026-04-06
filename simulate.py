@@ -495,8 +495,9 @@ def run_closed_loop_case(
         t_eval=t_eval,
         events=event_apogee,
         method=ivp_method,
-        rtol=1e-6,
-        atol=1e-9
+        rtol=1e-4,
+        atol=1e-6,
+        max_step=0.01,
     )
 
 
@@ -547,8 +548,9 @@ def simulate_rocket_trajectory(disturbance=None, ivp_method="BDF"):
         t_eval=t_eval,
         events=event_apogee,
         method=ivp_method,
-        rtol=1e-6,
-        atol=1e-9
+        rtol=1e-4,
+        atol=1e-6,
+        max_step=0.01,
     )
     print(f"[1/5] Closed-loop done in {time.perf_counter()-_t0:.1f}s: "
           f"t_final={sol_cl.t[-1]:.2f}s, steps={sol_cl.t.size}")
@@ -595,8 +597,9 @@ def simulate_rocket_trajectory(disturbance=None, ivp_method="BDF"):
         t_eval=t_eval,
         events=event_apogee,
         method=ivp_method,
-        rtol=1e-6,
-        atol=1e-9
+        rtol=1e-4,
+        atol=1e-6,
+        max_step=0.01,
     )
     print(f"[2/5] Open-loop done in {time.perf_counter()-_t0:.1f}s: t_final={sol_ol.t[-1]:.2f}s")
 
@@ -634,8 +637,9 @@ def simulate_rocket_trajectory(disturbance=None, ivp_method="BDF"):
         t_eval=t_eval,
         events=event_apogee,
         method=ivp_method,
-        rtol=1e-6,
-        atol=1e-9
+        rtol=1e-4,
+        atol=1e-6,
+        max_step=0.01,
     )
     print(f"      Disturbed CL done in {time.perf_counter()-_t0:.1f}s: t_final={sol_dist_cl.t[-1]:.2f}s")
 
@@ -648,8 +652,9 @@ def simulate_rocket_trajectory(disturbance=None, ivp_method="BDF"):
         t_eval=t_eval,
         events=event_apogee,
         method=ivp_method,
-        rtol=1e-6,
-        atol=1e-9
+        rtol=1e-4,
+        atol=1e-6,
+        max_step=0.01,
     )
     print(f"      Disturbed OL done in {time.perf_counter()-_t0:.1f}s: t_final={sol_dist_ol.t[-1]:.2f}s")
     print("[4/5] Disturbance done")
