@@ -8,8 +8,9 @@ def hat(vec: np.ndarray) -> np.ndarray: #cross product
         [-vec[1], vec[0], 0.0]
     ])
 
-
-def Cba(psi: float, theta: float, phi: float) -> np.ndarray: #transform vector between frames
+# phi: roll, theta: pitch, psi: yaw
+def Cba(psi: float, theta: float, phi: float) -> np.ndarray:
+    #transform vector #transform vector from inertial frame to body frame
     return np.array([
         [
             np.cos(psi) * np.cos(theta),
@@ -29,7 +30,9 @@ def Cba(psi: float, theta: float, phi: float) -> np.ndarray: #transform vector b
     ])
 
 
-def Sba(phi: float, theta: float) -> np.ndarray: #L matrix: L @ [phi_dot, theta_dot, psi_dot] = [p, q, r]
+def Sba(phi: float, theta: float) -> np.ndarray:
+    # transforms Euler angle rates to body angular velocities   
+    # p: roll, q: pitch, r: yaw
     return np.array([
         [1.0,  0.0,              -np.sin(theta)             ],
         [0.0,  np.cos(phi),       np.sin(phi) * np.cos(theta)],

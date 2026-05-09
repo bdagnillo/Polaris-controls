@@ -10,19 +10,19 @@ def canard_torque(delta_c: float, p: RocketParams, U: float, rho: float) -> floa
 
     Uses the same lift-slope model as the fin cant roll moment in forces_and_moments.
     The roll moment coefficient per radian of deflection is:
-        C_l_delta = 3 * (y_mac + R) * lift_slope / d
+        C_l_delta = num_fins * (y_mac + R) * lift_slope / d
     so that  M_roll = 0.5 * rho * A_ref * d * C_l_delta * delta_c * U^2.
 
     TODO: validate / replace with measured or CFD-derived C_l_delta for the
     actual canard geometry once available.
     """
     Mach = U / 340.0
-    beta_m = np.sqrt(max(1.0 - Mach**2, 1e-6))
-    lift_slope = (
+    beta_m = np.sqrt(max(1.0 - Mach**2, 1e-6)) # compressibility factor
+    lift_slope = ( # line 239 in Latex editor of Matteo's report 
         2.0 * np.pi * (p.s_fin**2 / p.A_ref) /
         (1.0 + np.sqrt(1.0 + (beta_m * p.s_fin / (p.A_fin * np.cos(p.gamma_c)))**2))
     )
-    C_l_delta = 3.0 * (p.y_mac + p.R) * lift_slope / p.d
+    C_l_delta = p.num_fins * (p.y_mac + p.R) * lift_slope / p.d
     return 0.5 * rho * p.A_ref * p.d * C_l_delta * delta_c * U**2
 
 
