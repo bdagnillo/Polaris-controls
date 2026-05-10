@@ -36,6 +36,7 @@ class RocketParams:
 
     r_ag_x: float = 0.134 # not sure what it means, but it is used 
     # in pitch moment equation
+    # ** this might be the distance betwwen center of pressure to cg
 
     @property
     def A_ref(self) -> float:
