@@ -10,19 +10,19 @@ def canard_torque(delta_c: float, p: RocketParams, U: float, rho: float) -> floa
 
     Uses the same lift-slope model as the fin cant roll moment in forces_and_moments.
     The roll moment coefficient per radian of deflection is:
-        C_l_delta = 3 * (y_mac + R) * lift_slope / d
+        C_l_delta = num_fins * (y_mac + R) * lift_slope / d
     so that  M_roll = 0.5 * rho * A_ref * d * C_l_delta * delta_c * U^2.
 
     TODO: validate / replace with measured or CFD-derived C_l_delta for the
     actual canard geometry once available.
     """
     Mach = U / 340.0
-    beta_m = np.sqrt(max(1.0 - Mach**2, 1e-6))
-    lift_slope = (
+    beta_m = np.sqrt(max(1.0 - Mach**2, 1e-6)) # compressibility factor
+    lift_slope = ( # line 239 in Latex editor of Matteo's report 
         2.0 * np.pi * (p.s_fin**2 / p.A_ref) /
         (1.0 + np.sqrt(1.0 + (beta_m * p.s_fin / (p.A_fin * np.cos(p.gamma_c)))**2))
     )
-    C_l_delta = 3.0 * (p.y_mac + p.R) * lift_slope / p.d
+    C_l_delta = p.num_fins * (p.y_mac + p.R) * lift_slope / p.d
     return 0.5 * rho * p.A_ref * p.d * C_l_delta * delta_c * U**2
 
 
@@ -46,18 +46,20 @@ def forces_and_moments(
     Ux, Uy, Uz = v_air_b #unpack body frame velocity components
     U = np.sqrt(Ux**2 + Uy**2 + Uz**2) + 1e-6
     alpha = np.arctan2(Uz, Ux) #angle of attack
+    # note: the pitch axis is dynamically defined such that the pitch angle is as always 
+    # co-planar with the AoA. Thus yaw should always be zero. 
     Mach = U / 340.0
-    beta = np.sqrt(max(1.0 - Mach**2, 1e-6))
+    beta_m = np.sqrt(max(1.0 - Mach**2, 1e-6)) # compressibility factor
 
-    p_roll = nu[3]
-    q_pitch = nu[4]
+    p_roll = nu[3] # these are angular velocities in body frame. p -> omega_roll
+    q_pitch = nu[4] # q -> omega_pitch
     r_ag = np.array([p.r_ag_x, 0.0, 0.0])
 
     C_N_nose = (2.0 / p.A_ref) * (p.A_ref * np.sin(-alpha)) #Normal force coefficient nose
     C_N_body = p.K_body * ((p.d * p.l_body) / p.A_ref) * np.sin(-alpha) ** 2 #body
-    C_N_fins = -alpha * p.K_TB * (3.0 / 2.0) * ( #fin
+    C_N_fins = -alpha * p.K_TB * (3.0 / 2.0) * ( #fin # this 3/2 factor is for 3 fins. need to correct
         2.0 * np.pi * (p.s_fin**2 / p.A_ref) /
-        (1.0 + np.sqrt(1.0 + (beta * p.s_fin / (p.A_fin * np.cos(p.gamma_c)))**2))
+        (1.0 + np.sqrt(1.0 + (beta_m * p.s_fin**2 / (p.A_fin * np.cos(p.gamma_c)))**2))
     )
 
     C_f = 0.007 #skin friction
@@ -73,17 +75,17 @@ def forces_and_moments(
         C_d_fins = 0.0
 
     C_d_0 = (   #baseline drag coef
-        3.0 * p.t_fin * p.s_fin * C_d_fins / p.A_ref
-        + (np.pi * 0.1 * p.R**2) / p.A_ref
+        p.num_fins * p.t_fin * p.s_fin * C_d_fins / p.A_ref
+        + (np.pi * 0.1 * p.R**2) / p.A_ref    # nose cone contribution
         + C_d_friction
     )
 
     lift_slope_term = (
         2.0 * np.pi * (p.s_fin**2 / p.A_ref) /
-        (1.0 + np.sqrt(1.0 + (beta * p.s_fin / (p.A_fin * np.cos(p.gamma_c)))**2))
+        (1.0 + np.sqrt(1.0 + (beta_m * p.s_fin**2 / (p.A_fin * np.cos(p.gamma_c)))**2))
     )
 
-    C_l_f = 3.0 * (p.y_mac + p.R) * lift_slope_term * p.cant / p.d #rolling moment coef contribution due to fin cant
+    C_l_f = p.num_fins * (p.y_mac + p.R) * lift_slope_term * p.cant / p.d #rolling moment coef contribution due to fin cant
 
     geom_term = (
         0.5 * (p.C_r + p.C_t) * p.R**2 * p.s_fin
@@ -95,7 +97,8 @@ def forces_and_moments(
     # where aerodynamic damping is negligible anyway (dynamic pressure → 0)
     U_damp = max(U, 5.0)
 
-    C_l_d = 3.0 * p_roll * (2.0 * np.pi / beta) * geom_term / (p.A_ref * p.d * U_damp) #roll damping coefficient
+    # this C_l_d eqn looks different from the report
+    C_l_d = p.num_fins * p_roll * (2.0 * np.pi / beta_m) * geom_term / (p.A_ref * p.d * U_damp) #roll damping coefficient
 
     N = 0.5 * p.rho * p.A_ref * (C_N_nose + C_N_body + C_N_fins) * U**2 #normal force
     D = 0.5 * p.rho * p.A_ref * C_d_0 * U**2 #drag
@@ -119,7 +122,7 @@ def forces_and_moments(
 
     C_damp_body = 0.55 * ((p.l**4 * p.R) / (p.A_ref * p.d)) * (np.abs(q_pitch) * q_pitch / U_damp**2)
     d_fin_cg = 0.825 - 0.506                                                         #pitch damping
-    C_damp_fin = 0.6 * 3.0 * p.A_fin * d_fin_cg**3 * np.abs(q_pitch) * q_pitch / (p.A_ref * p.d * U_damp**2)
+    C_damp_fin = 0.6 * p.num_fins * p.A_fin * d_fin_cg**3 * np.abs(q_pitch) * q_pitch / (p.A_ref * p.d * U_damp**2)
 
     m_damping = Ccb.T @ np.array([
         0.0,
@@ -250,7 +253,7 @@ def run_closed_loop_case(
     t_eval: np.ndarray,
     rocket: RocketParams,
     control: ControlParams,
-    phi_ref: float,
+    phi_ref: float, # desried roll rate
     ivp_method: str = "BDF"
 ):
     return solve_ivp(

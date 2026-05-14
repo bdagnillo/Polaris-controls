@@ -10,28 +10,33 @@ class RocketParams:
 
     # all lengths in meters
     R: float = 0.0762 / 2 # rocket radius
-    l: float = 1.9558 # total length maybe
-    l_body: float = 0.711
-    K_body: float = 1.1
+    l: float = 1.9558 # total length maybe??? where does 1.9558 comes from
+    l_body: float = 0.711 # body length
+    K_body: float = 1.1 # correction factor for body tube normal force
 
     # fin geometry
+    num_fins: int = 3 # number of fins
     s_fin: float = 0.0635 #fin span
     gamma_c: float = 0.2915
+    # in Matteo's report gamma_c is called fineness parameter, but
+    # actually this is actually mid-chord sweep angle [rad]
     t_fin: float = 0.00508 #thickness
     C_r: float = 0.0889 #root chord
-    C_t: float = 0.0889 - 0.0381 #tip
-    c_barre: float = 0.0716
-    cant: float = 0.1 * np.pi / 180
+    C_t: float = 0.0889 - 0.0381 #tip chord
+    c_barre: float = 0.0716 # mean aerodynamic chord
+    cant: float = 0.1 * np.pi / 180 # cant angle [rad]
 
     Jx: float = 0.02
     Jy: float = 0.2 #inertia
     Jz: float = 0.2
 
     Tmax: float = 10.0 #max thrust
-    tburn: float = 2.5
+    tburn: float = 2.5 # burn time
     fade_time: float = 15.0
 
-    r_ag_x: float = 0.134
+    r_ag_x: float = 0.134 # not sure what it means, but it is used 
+    # in pitch moment equation
+    # ** this might be the distance betwwen center of pressure to cg
 
     @property
     def A_ref(self) -> float:
@@ -42,15 +47,17 @@ class RocketParams:
         return 2 * self.R
 
     @property
-    def A_fin(self) -> float: #fin area
-        return (0.0889 + (0.0889 - 0.0381)) * self.s_fin / 2
+    def A_fin(self) -> float: #fin area (one side)
+        return (self.C_r + self.C_t) * self.s_fin / 2
 
     @property
-    def y_mac(self) -> float: #location related to mac
+    def y_mac(self) -> float: # spanwise distance from the fin root 
+                              # to the mean aerodynamic chord
         return (self.s_fin / 3) * ((self.C_r + 2 * self.C_t) / (self.C_r + self.C_t))
 
     @property
-    def K_TB(self) -> float: #correction factor
+    def K_TB(self) -> float: #correction factor for normal force
+                             # accounting for body-fin interference
         return 1 + self.R / (self.R + self.s_fin)
 
     def __post_init__(self):
@@ -58,10 +65,10 @@ class RocketParams:
         self._Mmat = np.block([
             [self.mass * np.eye(3), np.zeros((3, 3))],
             [np.zeros((3, 3)),      self._J          ]
-        ])
+        ])# 6x6 combined mass-inertia matrix
 
     @property
-    def J(self) -> np.ndarray: #inertia matrix
+    def J(self) -> np.ndarray: # rotational inertia matrix
         return self._J
 
     @property
