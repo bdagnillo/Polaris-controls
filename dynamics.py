@@ -186,8 +186,8 @@ def ode_cl(t: float, X: np.ndarray, phi_ref: float, p: RocketParams, c: ControlP
 
     delta_cx = c.Kp_p * e_p + c.Ki_p * xi  #canard deflection [rad]
     m_cx = canard_torque(delta_cx, p, U, p.rho)
-    m_cy = c.Kp_q * e_q
-    m_cz = c.Kp_r * e_r
+    m_cy = 0
+    m_cz = 0
 
     m_c = np.array([m_cx, m_cy, m_cz])
     dnu = ode_rocket(t, nu, m_c, p)
