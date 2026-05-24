@@ -86,5 +86,5 @@ class ControlParams:
     K_theta: float = 2.0 #gain converts pitch angle error to pitch rate command
     K_psi: float = 2.0 #same for yaw
 
-    # Kp_q: float = 3.0 #proportional gain for pitch rate
-    # Kp_r: float = 3.0 #proportional gain for yaw rate
+    Kp_q: float = 0.0 #proportional gain for pitch rate
+    Kp_r: float = 0.0 #proportional gain for yaw rate
