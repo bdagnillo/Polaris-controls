@@ -30,10 +30,6 @@ class RocketParams:
     Jy: float = 0.2 #inertia
     Jz: float = 0.2
 
-    Tmax: float = 10.0 #max thrust
-    tburn: float = 2.5 # burn time
-    fade_time: float = 15.0
-
     r_ag_x: float = 0.134 # not sure what it means, but it is used 
     # in pitch moment equation
     # ** this might be the distance betwwen center of pressure to cg
