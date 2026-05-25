@@ -10,7 +10,7 @@ def canard_torque(delta_c: float, p: RocketParams, U: float, rho: float) -> floa
 
     Uses the same lift-slope model as the fin cant roll moment in forces_and_moments.
     The roll moment coefficient per radian of deflection is:
-        C_l_delta = num_fins * (y_mac + R) * lift_slope / d
+        C_l_delta = num_fins * (y_mac_fin + R) * lift_slope / d
     so that  M_roll = 0.5 * rho * A_ref * d * C_l_delta * delta_c * U^2.
 
     TODO: validate / replace with measured or CFD-derived C_l_delta for the
@@ -20,9 +20,11 @@ def canard_torque(delta_c: float, p: RocketParams, U: float, rho: float) -> floa
     beta_m = np.sqrt(max(1.0 - Mach**2, 1e-6)) # compressibility factor
     lift_slope = ( # line 239 in Latex editor of Matteo's report 
         2.0 * np.pi * (p.s_fin**2 / p.A_ref) /
-        (1.0 + np.sqrt(1.0 + (beta_m * p.s_fin / (p.A_fin * np.cos(p.gamma_c)))**2))
+        (1.0 + np.sqrt(1.0 + (beta_m * p.s_fin / (p.A_fin * np.cos(p.gamma_c_fin)))**2))
     )
-    C_l_delta = p.num_fins * (p.y_mac + p.R) * lift_slope / p.d
+    C_l_delta = p.num_fins * (p.y_mac_fin + p.R) * lift_slope / p.d
+    
+    # should return moment around x-axis
     return 0.5 * rho * p.A_ref * p.d * C_l_delta * delta_c * U**2
 
 
@@ -59,14 +61,14 @@ def forces_and_moments(
     C_N_body = p.K_body * ((p.d * p.l_body) / p.A_ref) * np.sin(-alpha) ** 2 #body
     C_N_fins = -alpha * p.K_TB * (3.0 / 2.0) * ( #fin # this 3/2 factor is for 3 fins. need to correct
         2.0 * np.pi * (p.s_fin**2 / p.A_ref) /
-        (1.0 + np.sqrt(1.0 + (beta_m * p.s_fin**2 / (p.A_fin * np.cos(p.gamma_c)))**2))
+        (1.0 + np.sqrt(1.0 + (beta_m * p.s_fin**2 / (p.A_fin * np.cos(p.gamma_c_fin)))**2))
     )
 
     C_f = 0.007 #skin friction
     C_f_c = C_f * (1.0 - 0.1 * Mach**2)
     C_d_friction = C_f_c * (
         ((1.0 + 1.0 / (2.0 * (p.l / p.d))) * np.pi * p.d * p.l +
-         (1.0 + 2.0 * p.t_fin / p.c_barre) * 6.0 * p.A_fin) / p.A_ref
+         (1.0 + 2.0 * p.t_fin / p.c_barrre_fin) * 6.0 * p.A_fin) / p.A_ref
     )
 
     if Mach < 1.0:
@@ -82,15 +84,15 @@ def forces_and_moments(
 
     lift_slope_term = (
         2.0 * np.pi * (p.s_fin**2 / p.A_ref) /
-        (1.0 + np.sqrt(1.0 + (beta_m * p.s_fin**2 / (p.A_fin * np.cos(p.gamma_c)))**2))
+        (1.0 + np.sqrt(1.0 + (beta_m * p.s_fin**2 / (p.A_fin * np.cos(p.gamma_c_fin)))**2))
     )
 
-    C_l_f = p.num_fins * (p.y_mac + p.R) * lift_slope_term * p.cant / p.d #rolling moment coef contribution due to fin cant
+    C_l_f = p.num_fins * (p.y_mac_fin + p.R) * lift_slope_term * p.cant_fin / p.d #rolling moment coef contribution due to fin cant
 
     geom_term = (
-        0.5 * (p.C_r + p.C_t) * p.R**2 * p.s_fin
-        + (p.C_r + 2.0 * p.C_t) * (1.0 / 3.0) * p.R * p.s_fin**2
-        + (p.C_r + 3.0 * p.C_t) * (1.0 / 12.0) * p.s_fin**3
+        0.5 * (p.C_r_fin + p.C_t_fin) * p.R**2 * p.s_fin
+        + (p.C_r_fin + 2.0 * p.C_t_fin) * (1.0 / 3.0) * p.R * p.s_fin**2
+        + (p.C_r_fin + 3.0 * p.C_t_fin) * (1.0 / 12.0) * p.s_fin**3
     )
 
     # Floor for damping denominators — prevents 1/U and 1/U² singularities near apogee
@@ -163,8 +165,8 @@ def ode_cl(t: float, X: np.ndarray, phi_ref: float, p: RocketParams, c: ControlP
 
     phi       = nu[6]
     roll_rate = nu[3]
-    pitch_rate = nu[4]
-    yaw_rate   = nu[5]
+    # pitch_rate = nu[4] No pitch/yaw control so pitch/yaw rate not needed
+    # yaw_rate   = nu[5]
     theta = nu[7]
     psi   = nu[8]
 
@@ -174,13 +176,14 @@ def ode_cl(t: float, X: np.ndarray, phi_ref: float, p: RocketParams, c: ControlP
     # Outer loop: roll angle error → roll rate command
     p_ref = c.K_phi * (phi_ref - phi)
 
-    # Pitch/yaw outer loops (unchanged)
-    q_ref = c.K_theta * (0.0 - theta)
-    r_ref = c.K_psi   * (0.0 - psi)
+    # Pitch/yaw outer loops (unchanged) (Not needed)
+    # q_ref = c.K_theta * (0.0 - theta)
+    # r_ref = c.K_psi   * (0.0 - psi)
 
     e_p = p_ref - roll_rate   #inner-loop roll rate error
-    e_q = q_ref - pitch_rate
-    e_r = r_ref - yaw_rate
+    # pitch and yaw error are not needed
+    # e_q = q_ref - pitch_rate
+    # e_r = r_ref - yaw_rate
 
     dxi = e_p #integrator driven by roll rate error
 
