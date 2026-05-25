@@ -1,14 +1,14 @@
 import numpy as np
 
 from params import RocketParams, ControlParams
+import aerodata as aero
 from kinematics import Cba
-from dynamics import canard_torque, forces_and_moments
+from dynamics import canard_torque_total, forces_and_moments
 
 
 def compute_body_air_quantities(
     t: np.ndarray,
     nu_hist: np.ndarray, #history of state vectors over time
-    rho: float = 1.225
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     alpha_array = np.zeros_like(t) #arrays same length as t
     beta_array = np.zeros_like(t)
@@ -29,6 +29,10 @@ def compute_body_air_quantities(
         Vbody_array[k] = Vmag #save magnitude at this instant for plotting
         alpha_array[k] = np.arctan2(Uz, Ux) #AoA
         beta_array[k] = np.arcsin(np.clip(Vy / (Vmag + 1e-6), -1.0, 1.0)) #sideslip angle
+        
+        pres = aero.pres_lapse(aero.p_abs_ground, nu_hist[k, 9]) # pressure at time step k
+        temp = aero.temp_lapse(aero.t_abs_ground, nu_hist[k, 9]) # temperature
+        rho = aero.calculate_density(pres, temp)         # density
         q_dyn[k] = 0.5 * rho * Vmag**2 #dynamic pressure
 
     return alpha_array, beta_array, q_dyn, Vbody_array
@@ -55,14 +59,21 @@ def reconstruct_control_history(t: np.ndarray, X: np.ndarray, c: ControlParams,
     e_q = q_ref - q_rate
     e_r = r_ref - r_rate
 
-    delta_cx = c.Kp_p * e_p + c.Ki_p * xi
+    delta_cx = c.Kp_p * e_p + c.Ki_p * xi # deflection angle in radians
     U_hist = np.array([
         np.linalg.norm(Cba(psi[k], theta[k], phi[k]) @ nu[k, 0:3]) + 1e-6
         for k in range(len(t))
     ])
-    m_cx = np.array([canard_torque(delta_cx[k], rocket, U_hist[k], rocket.rho) for k in range(len(t))])
-    m_cy = c.Kp_q * e_q
-    m_cz = c.Kp_r * e_r
+    
+    
+    m_cx = np.zeros(len(t))
+    for k in range(len(t)):
+        pres = aero.pres_lapse(aero.p_abs_ground, nu[k, 9]) # pressure
+        temp = aero.temp_lapse(aero.t_abs_ground, nu[k, 9]) # temperature        
+        m_cx[k] = canard_torque_total(delta_cx[k]*np.pi/180, pres, temp, U_hist[k], rocket)
+    
+    m_cy = 0
+    m_cz = 0
 
     return p_ref, e_p, e_q, e_r, m_cx, m_cy, m_cz
 
