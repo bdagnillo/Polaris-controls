@@ -29,6 +29,11 @@ def forces_and_moments(
     m_c: np.ndarray, #control moment vector
     p: RocketParams
 ) -> tuple[np.ndarray, float]:
+    
+    pres = aero.pres_lapse(aero.p_abs_ground, nu[9]) # pressure
+    temp = aero.temp_lapse(aero.t_abs_ground, nu[9]) # temperature
+    rho = aero.calculate_density(pres, temp)         # density
+        
     DCM = Cba(psi, theta, phi) #build orientation matrix from euler angles
 
     v_air_b = np.real(DCM @ nu[0:3]) #take translational velocity and rotate to give air relative velocity
@@ -94,11 +99,11 @@ def forces_and_moments(
     # this C_l_d eqn looks different from the report
     C_l_d = p.num_fins * p_roll * (2.0 * np.pi / beta_m) * geom_term / (p.A_ref * p.d * U_damp) #roll damping coefficient
 
-    N = 0.5 * p.rho * p.A_ref * (C_N_nose + C_N_body + C_N_fins) * U**2 #normal force
-    D = 0.5 * p.rho * p.A_ref * C_d_0 * U**2 #drag
+    N = 0.5 * rho * p.A_ref * (C_N_nose + C_N_body + C_N_fins) * U**2 #normal force
+    D = 0.5 * rho * p.A_ref * C_d_0 * U**2 #drag
 
     m_l = np.array([  # aero roll moment vector
-        0.5 * p.rho * p.A_ref * p.d * (C_l_f - C_l_d) * U**2,
+        0.5 * rho * p.A_ref * p.d * (C_l_f - C_l_d) * U**2,
         0.0,
         0.0
     ])
@@ -120,7 +125,7 @@ def forces_and_moments(
 
     m_damping = Ccb.T @ np.array([
         0.0,
-        0.5 * p.rho * p.A_ref * (-C_damp_fin - C_damp_body) * p.d * U**2,
+        0.5 * rho * p.A_ref * (-C_damp_fin - C_damp_body) * p.d * U**2,
         0.0
     ])
 

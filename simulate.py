@@ -6,6 +6,7 @@ from scipy.integrate import solve_ivp
 
 from disturbance_models import load as load_disturbance
 from params import RocketParams, ControlParams
+import aerodata as aero
 from dynamics import (
     ode_cl, ode_open, ode_cl_disturb, ode_open_disturb,
     event_apogee, run_closed_loop_case,
@@ -93,7 +94,10 @@ def _run_closed_loop(X0, t_eval, phi_ref_main, rocket, control, ivp_method):
           f"max canard deflection={np.degrees(np.abs(delta_cx_hist).max()):.4f} deg")
 
     print("[1/5] Computing aero quantities ...")
-    alpha_array, beta_array, q_dyn, Vbody_array = compute_body_air_quantities(t, nu, rocket.rho)
+    pres = aero.pres_lapse(aero.p_abs_ground, nu[9]) # pressure
+    temp = aero.temp_lapse(aero.t_abs_ground, nu[9]) # temperature
+    rho = aero.calculate_density(pres, temp)         # density
+    alpha_array, beta_array, q_dyn, Vbody_array = compute_body_air_quantities(t, nu, rho)
     print(f"      Max AoA={np.degrees(np.abs(alpha_array).max()):.2f}deg, "
           f"max q_dyn={q_dyn.max():.1f}Pa")
 

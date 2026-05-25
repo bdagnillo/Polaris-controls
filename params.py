@@ -4,7 +4,6 @@ from dataclasses import dataclass
 
 @dataclass
 class RocketParams:
-    rho: float = 1.225 #TBD
     mass: float = 5 # kg TBD
     g: float = 9.8066 # m/s^2
 
