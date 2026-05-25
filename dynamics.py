@@ -3,31 +3,23 @@ from scipy.integrate import solve_ivp
 
 from params import RocketParams, ControlParams
 from kinematics import hat, Cba, Sba, C1
+import aerodata as aero
 
-
-def canard_torque(delta_c: float, p: RocketParams, U: float, rho: float) -> float:
-    """Convert canard deflection angle (rad) to roll torque (N·m).
-
-    Uses the same lift-slope model as the fin cant roll moment in forces_and_moments.
-    The roll moment coefficient per radian of deflection is:
-        C_l_delta = num_fins * (y_mac_fin + R) * lift_slope / d
-    so that  M_roll = 0.5 * rho * A_ref * d * C_l_delta * delta_c * U^2.
-
-    TODO: validate / replace with measured or CFD-derived C_l_delta for the
-    actual canard geometry once available.
-    """
-    Mach = U / 340.0
-    beta_m = np.sqrt(max(1.0 - Mach**2, 1e-6)) # compressibility factor
-    lift_slope = ( # line 239 in Latex editor of Matteo's report 
-        2.0 * np.pi * (p.s_fin**2 / p.A_ref) /
-        (1.0 + np.sqrt(1.0 + (beta_m * p.s_fin / (p.A_fin * np.cos(p.gamma_c_fin)))**2))
-    )
-    C_l_delta = p.num_fins * (p.y_mac_fin + p.R) * lift_slope / p.d
+def canard_torque_total(deflection_angle: float, 
+                        pres: float, 
+                        temp: float, 
+                        U: float, 
+                        p: RocketParams) -> float:
+    rho = aero.calculate_density(pres, temp)
+    re = aero.calculate_reynolds(pres, temp, U, p.c_barre_canard)
+    ma = aero.calculate_mach(temp, U)
     
-    # should return moment around x-axis
-    return 0.5 * rho * p.A_ref * p.d * C_l_delta * delta_c * U**2
-
-
+    cl = aero.cl_interp([[re, ma, deflection_angle]])[0] # simplify that AoA is the same as deflection angle
+    
+    lift_force_per_canard = aero.calculate_lift_force_per_canard(rho, U, p.A_ref, cl)
+    total_canard_torque = lift_force_per_canard * (p.y_mac_canard + p.R) * p.num_canards
+    return total_canard_torque
+    
 def forces_and_moments(
     t: float,
     psi: float,
@@ -186,13 +178,13 @@ def ode_cl(t: float, X: np.ndarray, phi_ref: float, p: RocketParams, c: ControlP
     # e_r = r_ref - yaw_rate
 
     dxi = e_p #integrator driven by roll rate error
-
+    
+    pres = aero.pres_lapse(aero.p_abs_ground, nu[9])
+    temp = aero.temp_lapse(aero.t_abs_ground, nu[9])
     delta_cx = c.Kp_p * e_p + c.Ki_p * xi  #canard deflection [rad]
-    m_cx = canard_torque(delta_cx, p, U, p.rho)
-    m_cy = 0
-    m_cz = 0
+    m_cx = canard_torque_total(delta_cx*np.pi/180, pres, temp, U, p)
 
-    m_c = np.array([m_cx, m_cy, m_cz])
+    m_c = np.array([m_cx, 0, 0])
     dnu = ode_rocket(t, nu, m_c, p)
 
     return np.concatenate([dnu, [dxi]])
@@ -224,8 +216,10 @@ def ode_cl_disturb(
     e_p = p_ref - roll_rate
     dxi = e_p
 
-    delta_cx = c.Kp_p * e_p + c.Ki_p * xi
-    m_cx = canard_torque(delta_cx, p, U, p.rho)
+    pres = aero.pres_lapse(aero.p_abs_ground, nu[9])
+    temp = aero.temp_lapse(aero.t_abs_ground, nu[9])
+    delta_cx = c.Kp_p * e_p + c.Ki_p * xi #canard deflection [rad]
+    m_cx = canard_torque_total(delta_cx*np.pi/180, pres, temp, U, p)
     m_c = np.array([m_cx, 0.0, 0.0]) + disturbance(t)
 
     dnu = ode_rocket(t, nu, m_c, p)
