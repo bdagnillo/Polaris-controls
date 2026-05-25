@@ -1,5 +1,4 @@
 import numpy as np
-from params import RocketParams
 from scipy.interpolate import RegularGridInterpolator
 
 # constants
