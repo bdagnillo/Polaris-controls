@@ -5,26 +5,37 @@ from scipy.interpolate import RegularGridInterpolator
 R = 287 # gas constant for air
 GAMMA = 1.4 # ratio of specific heats
 
-# measured quantity from sensors
-t_abs = 0 # Kelvin
-p_abs = 0 # Pa, absolute pressure
-# store the last measured temperature before launch
-t_abs_final = 0 # Kelvin
+# on flight, pressure and temp from sensors are directly used
+# here, we set a pres and temp on the ground and use linear relation with
+# altitude to simulate pres and temp change
+
+p_abs_gounrd = 100500 # Pa, absolute pressure
+t_abs_ground = 293 # Kelvin
 
 # %% air quantity calculations
-def temp_lapse(t_abs_final: float, 
+def temp_lapse(t_abs_ground: float, 
                agl: float # altitude above ground level in [meters]
                ) -> float: # [K]
     """
     Returns temperature at altitude using Linear temperature profile 
     with altitude, based on the last measured temperature before launch.
     """
-    if t_abs_final <= 0:
-        raise ValueError("Temperature must be positive.")
+    if t_abs_ground <= 273:
+        raise ValueError("Temperature at ground level is too low. Please verify.")
     if agl < 0:
         raise ValueError("Altitude above ground cannot be negative.")
     
-    return t_abs_final - 0.0065 * agl
+    return t_abs_ground - 0.0065 * agl
+
+def pres_lapse(p_abs_ground: float,
+               agl: float # altitude above ground level in [meters]
+               ) -> float: # [K]
+    if p_abs_ground <= 95000:
+        raise ValueError("Pressure at ground level is too low. Please verify.")
+    if agl < 0:
+        raise ValueError("Altitude above ground cannot be negative.")
+    
+    return p_abs_ground - 10 * agl
 
 def calculate_density(pres: float, temp: float) -> float: # [kg/m^3]
     if pres <= 0 or temp <= 0:
@@ -119,16 +130,16 @@ cl_interp = RegularGridInterpolator( # the interpolator
     bounds_error=False,
     fill_value=None
     )
+# note: in simulation, we will simplify that AoA is the same as deflection angle
 
 # test point
-re_test = 1.5e5
-ma_test = 0.25
-aoa_test = 2.1
+# re_test = 1.5e5
+# ma_test = 0.25
+# aoa_test = 2.1
 #cl_test = cl_interp([[re_test, ma_test, aoa_test]])[0]
 
 
 # %% canard lift force (should this be in the dynamics section?)
-def calculate_lift_force(rho: float, U: float, A_ref: float, cl: float
+def calculate_lift_force_per_canard(rho: float, U: float, A_ref: float, cl: float
                          ) -> float:
     return 0.5 * rho * U**2 * A_ref * cl
-

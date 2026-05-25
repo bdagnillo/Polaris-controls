@@ -32,7 +32,7 @@ class RocketParams:
     gamma_c_canard: float = 1 # mid-chord sweep angle
     t_canard: float = 1 # thickness
     C_r_canard: float = 1 # root chord
-    C_t_canard: float = 1 # tip chord
+    C_t_canard: float = 0 # tip chord
     c_barre_canard: float = 1 # mean aerodynamic chord
 
     # rocket moment of inertia
