@@ -56,7 +56,7 @@ def forces_and_moments(
 
     C_N_nose = (2.0 / p.A_ref) * (p.A_ref * np.sin(-alpha)) #Normal force coefficient nose
     C_N_body = p.K_body * ((p.d * p.l_body) / p.A_ref) * np.sin(-alpha) ** 2 #body
-    C_N_fins = -alpha * p.K_TB * (3.0 / 2.0) * ( #fin # this 3/2 factor is for 3 fins. need to correct
+    C_N_fins = -alpha * p.K_TB * (p.num_fins / 2.0) * ( # fins normal force
         2.0 * np.pi * (p.s_fin**2 / p.A_ref) /
         (1.0 + np.sqrt(1.0 + (beta_m * p.s_fin**2 / (p.A_fin * np.cos(p.gamma_c_fin)))**2))
     )
