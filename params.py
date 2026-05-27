@@ -7,14 +7,14 @@ class RocketParams:
     mass: float = 5 # kg TBD
     g: float = 9.8066 # m/s^2
 
-    # all lengths in meters
+    # ALL LENGTHS IN METERS
     R: float = 0.0762 / 2 # rocket radius
     l: float = 1.9558 # total length
     l_body: float = 0.711 # body length
     K_body: float = 1.1 # correction factor for body tube normal force
 
     # fin geometry
-    num_fins: int = 3 # number of fins
+    num_fins: int = 4 # number of fins
     s_fin: float = 0.0635 #fin span
     gamma_c_fin: float = 0.2915
     # in Matteo's report gamma_c is called fineness parameter, but
@@ -27,12 +27,13 @@ class RocketParams:
 
     # canard geometry
     num_canards: int = 2
-    s_canard: float = 1 # span
-    gamma_c_canard: float = 1 # mid-chord sweep angle
-    t_canard: float = 1 # thickness
-    C_r_canard: float = 1 # root chord
+    geometry_scaling_factor: float = 1
+    s_canard: float = 0.3048 # span
+    gamma_c_canard: float = 0.820305 # mid-chord sweep angle [rad]
+    t_canard: float = 0.022225 # thickness
+    C_r_canard: float = 0.6536436 # root chord
     C_t_canard: float = 0 # tip chord
-    c_barre_canard: float = 1 # mean aerodynamic chord
+    c_barre_canard: float = 0.4357624 # mean aerodynamic chord
 
     # rocket moment of inertia
     Jx: float = 0.02
